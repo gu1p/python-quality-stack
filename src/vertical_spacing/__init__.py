@@ -1,3 +1,3 @@
-from vertical_spacing.cli import format_file, format_text, main
+from python_quality_stack.vertical_spacing import format_file, format_text, main
 
 __all__ = ["format_file", "format_text", "main"]
