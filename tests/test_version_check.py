@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
 from python_quality_stack import version_check
+
+
+@pytest.fixture(autouse=True)
+def clear_version_skip_env(monkeypatch) -> None:
+    monkeypatch.delenv(version_check.SKIP_ENV, raising=False)
 
 
 def test_version_check_passes_when_current(monkeypatch, capsys) -> None:

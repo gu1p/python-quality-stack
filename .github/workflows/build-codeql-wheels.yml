@@ -1,0 +1,58 @@
+name: Build CodeQL Wheels
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux64
+          - os: macos-13
+            platform: osx64
+          - os: windows-latest
+            platform: win64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Vendor CodeQL
+        run: python scripts/vendor_codeql.py "${{ matrix.platform }}"
+
+      - name: Build wheel
+        env:
+          PYTHON_QUALITY_CODEQL_PLATFORM: ${{ matrix.platform }}
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+
+      - name: Smoke test bundled CodeQL
+        run: |
+          python -m pip install dist/*.whl
+          mkdir -p smoke/src/pkg
+          cat > smoke/src/pkg/models.py <<'PY'
+          CORE_EVENT_SLOTS = frozenset()
+          PY
+          cd smoke
+          if python-quality dead-code > output.txt 2>&1; then
+            cat output.txt
+            exit 1
+          fi
+          cat output.txt
+          grep CORE_EVENT_SLOTS output.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-quality-stack-${{ matrix.platform }}-wheel
+          path: dist/*.whl

@@ -24,6 +24,7 @@ It delegates to:
 - `mypy`
 - `complexipy`
 - `vulture`
+- bundled CodeQL security-and-quality analysis
 - `pytest`
 - built-in vertical spacing checks
 - built-in static quality guards
@@ -62,3 +63,26 @@ allow-marker = "allow-unused-enum:"
 the check fails and prints the `uv lock --upgrade-package python-quality-stack` command. If GitHub is
 unavailable or the installed commit cannot be determined, it prints a warning and continues. Set
 `PYTHON_QUALITY_SKIP_VERSION_CHECK=1` to skip it explicitly.
+
+`python-quality dead-code` runs Vulture first, then the bundled CodeQL Python `security-and-quality`
+suite. The CodeQL pass is bundled into platform-specific wheels and does not download anything at
+runtime. Set `PYTHON_QUALITY_SKIP_CODEQL=1` only as a temporary local escape hatch.
+
+## Bundled CodeQL wheels
+
+Release wheels are built with the official CodeQL bundle from `github/codeql-action`, pinned in
+`scripts/vendor_codeql.py`. The supported bundle platforms are:
+
+- `linux64`
+- `osx64`
+- `win64`
+
+Build a bundled wheel for one platform with:
+
+```bash
+python scripts/vendor_codeql.py linux64
+PYTHON_QUALITY_CODEQL_PLATFORM=linux64 python -m build --wheel
+```
+
+The custom Hatch build hook marks the wheel as platform-specific and includes the vendored CodeQL
+bundle. Source installs or unbundled wheels fail the CodeQL phase with an actionable install message.

@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from python_quality_stack.codeql import run_codeql_check
 from python_quality_stack.config import QualityConfig, load_config
 from python_quality_stack.guards import guard_failures, print_guard_failures
 from python_quality_stack.runner import run, run_all
@@ -102,7 +103,7 @@ def _complexity(config: QualityConfig) -> int:
 
 
 def _dead_code(config: QualityConfig) -> int:
-    return run(
+    status = run(
         [
             "vulture",
             *_path_args(config.dead_code_paths),
@@ -110,6 +111,11 @@ def _dead_code(config: QualityConfig) -> int:
             str(config.dead_code_min_confidence),
         ]
     )
+
+    if status != 0:
+        return status
+
+    return run_codeql_check(config.dead_code_paths)
 
 
 def _test(config: QualityConfig) -> int:

@@ -1,5 +1,6 @@
 /.venv/
 /.pytest_cache/
 /dist/
+/src/python_quality_stack/_vendor/codeql/
 *.egg-info/
 __pycache__/
