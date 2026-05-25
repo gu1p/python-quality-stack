@@ -10,6 +10,8 @@ from typing import TypeGuard
 
 DEFAULT_PATHS = (Path("src"), Path("tests"), Path("scripts"))
 EXCLUDED_PARTS = frozenset({"dist", "node_modules", ".git", ".venv"})
+SMALL_UNRELATED_CLUSTER_LIMIT = 3
+SMALL_UNRELATED_STATEMENT_CHARS = 40
 
 COMPOUND_STATEMENTS = (
     ast.AsyncFor,
@@ -32,6 +34,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def run_vertical_spacing(paths: Sequence[Path], *, fix: bool) -> int:
     print(f"$ vertical-spacing {'--fix' if fix else '--check'} {' '.join(_path_args(paths))}", flush=True)
+
     changed = [path for path in _python_files(paths) if format_file(path, fix=fix)]
 
     if not changed:
@@ -72,6 +75,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--fix", action="store_true", help="rewrite files in place")
     mode.add_argument("--check", action="store_true", help="only report files that would change")
+
     parser.add_argument("paths", nargs="*", type=Path, default=DEFAULT_PATHS)
 
     return parser.parse_args(argv)
@@ -104,7 +108,9 @@ def _format_text_once(text: str) -> str:
     lines = text.splitlines()
     tree: ast.Module = ast.parse(text)
     required_blank_before = _required_blank_lines(tree, lines)
+
     function_spans = _function_spans(tree)
+
     protected_inner_lines = _protected_multiline_string_inner_lines(text)
     formatted_lines = _format_lines(lines, required_blank_before, function_spans, protected_inner_lines)
 
@@ -131,20 +137,182 @@ def _collect_required_blank_lines(body: list[ast.stmt], lines: list[str], requir
 
 def _add_body_boundaries(body: list[ast.stmt], lines: list[str], required: set[int]) -> None:
     for index, current in enumerate(body[1:], start=1):
-        previous = body[index - 1]
-
-        if _needs_blank_before(previous, current, index == len(body) - 1, lines):
+        if _needs_blank_before(body, index, lines):
             required.add(_start_line(current))
 
 
-def _needs_blank_before(previous: ast.stmt, current: ast.stmt, is_final: bool, lines: list[str]) -> bool:
+def _needs_blank_before(body: list[ast.stmt], index: int, lines: list[str]) -> bool:
+    previous = body[index - 1]
+    current = body[index]
+    is_final = index == len(body) - 1
+
     if _has_comment_between(lines, _end_line(previous), _start_line(current)):
         return False
 
     if _is_final_terminal(current, is_final):
         return True
 
-    return _is_spacing_source(previous) or _is_spacing_target(current)
+    if _is_spacing_source(previous) or _is_spacing_target(current):
+        return True
+
+    return _needs_cohesion_blank(body, index, lines)
+
+
+def _needs_cohesion_blank(body: list[ast.stmt], index: int, lines: list[str]) -> bool:
+    previous = body[index - 1]
+    current = body[index]
+
+    if not _is_simple_cohesion_statement(previous) or not _is_simple_cohesion_statement(current):
+        return False
+
+    if _statements_are_cohesive(previous, current):
+        return False
+
+    return not _small_unrelated_cluster_allows_tight_pair(body, index, lines)
+
+
+def _statements_are_cohesive(previous: ast.stmt, current: ast.stmt) -> bool:
+    return _assignment_is_used_by_next_statement(previous, current) or _same_call_receiver(previous, current)
+
+
+def _assignment_is_used_by_next_statement(previous: ast.stmt, current: ast.stmt) -> bool:
+    return bool(_assigned_references(previous) & _loaded_references(current))
+
+
+def _same_call_receiver(previous: ast.stmt, current: ast.stmt) -> bool:
+    previous_receiver = _call_receiver(previous)
+
+    current_receiver = _call_receiver(current)
+
+    return previous_receiver is not None and previous_receiver == current_receiver
+
+
+def _small_unrelated_cluster_allows_tight_pair(body: list[ast.stmt], index: int, lines: list[str]) -> bool:
+    if not _is_small_unrelated_pair(body[index - 1], body[index], lines):
+        return False
+
+    cluster_start = _small_unrelated_cluster_start(body, index, lines)
+
+    return (index - cluster_start) % SMALL_UNRELATED_CLUSTER_LIMIT != 0
+
+
+def _small_unrelated_cluster_start(body: list[ast.stmt], index: int, lines: list[str]) -> int:
+    start = index
+
+    while start > 0 and _is_small_unrelated_pair(body[start - 1], body[start], lines):
+        start -= 1
+
+    return start
+
+
+def _is_small_unrelated_pair(previous: ast.stmt, current: ast.stmt, lines: list[str]) -> bool:
+    if _has_comment_between(lines, _end_line(previous), _start_line(current)):
+        return False
+
+    if _statements_are_cohesive(previous, current):
+        return False
+
+    return _is_small_cluster_statement(previous, lines) and _is_small_cluster_statement(current, lines)
+
+
+def _is_small_cluster_statement(statement: ast.stmt, lines: list[str]) -> bool:
+    if not _is_simple_cohesion_statement(statement) or _start_line(statement) != _end_line(statement):
+        return False
+
+    return len(lines[_start_line(statement) - 1].strip()) < SMALL_UNRELATED_STATEMENT_CHARS
+
+
+def _is_simple_cohesion_statement(statement: ast.stmt) -> bool:
+    return _is_assignment_statement(statement) or _is_call_expression(statement)
+
+
+def _is_assignment_statement(statement: ast.stmt) -> bool:
+    return isinstance(statement, ast.Assign | ast.AnnAssign | ast.AugAssign)
+
+
+def _is_call_expression(statement: ast.stmt) -> bool:
+    return isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)
+
+
+def _assigned_references(statement: ast.stmt) -> set[str]:
+    if isinstance(statement, ast.Assign):
+        return _target_references(statement.targets)
+
+    if isinstance(statement, ast.AnnAssign | ast.AugAssign):
+        return _target_references([statement.target])
+
+    return set()
+
+
+def _target_references(targets: Sequence[ast.expr]) -> set[str]:
+    references: set[str] = set()
+
+    for target in targets:
+        references.update(_target_reference(target))
+
+    return references
+
+
+def _target_reference(target: ast.expr) -> set[str]:
+    if isinstance(target, ast.Name):
+        return {_name_reference(target.id)}
+
+    if isinstance(target, ast.Attribute):
+        return {_attribute_reference(target)}
+
+    if isinstance(target, ast.Tuple | ast.List):
+        return _target_references(target.elts)
+
+    return set()
+
+
+def _loaded_references(statement: ast.stmt) -> set[str]:
+    references: set[str] = set()
+
+    for node in ast.walk(statement):
+        references.update(_loaded_reference(node))
+
+    return references
+
+
+def _loaded_reference(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+        return {_name_reference(node.id)}
+
+    if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+        return {_attribute_reference(node)}
+
+    return set()
+
+
+def _call_receiver(statement: ast.stmt) -> str | None:
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        return None
+
+    call = statement.value
+
+    if isinstance(call.func, ast.Attribute):
+        return _reference_key(call.func.value)
+
+    return None
+
+
+def _name_reference(name: str) -> str:
+    return f"name:{name}"
+
+
+def _attribute_reference(node: ast.Attribute) -> str:
+    return f"attr:{_reference_key(node)}"
+
+
+def _reference_key(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return _name_reference(node.id)
+
+    if isinstance(node, ast.Attribute):
+        return f"{_reference_key(node.value)}.{node.attr}"
+
+    return ast.dump(node, include_attributes=False)
 
 
 def _is_final_terminal(statement: ast.stmt, is_final: bool) -> bool:
@@ -230,6 +398,7 @@ def _format_lines(
             result.extend("" for _ in range(pending_blank_lines))
             result.append(line)
             pending_blank_lines = 0
+
             previous_line_number = _next_previous_line_number(line, line_number, previous_line_number)
             continue
 

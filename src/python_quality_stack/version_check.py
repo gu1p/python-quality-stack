@@ -125,6 +125,9 @@ def _warn(message: str) -> None:
 
 def _print_behind(installed: str, latest: str) -> None:
     print("python-quality-stack is behind:")
+
     print(f"  installed: {_short(installed)}")
+
     print(f"  latest:    {_short(latest)}")
+
     print("Run: uv lock --upgrade-package python-quality-stack")

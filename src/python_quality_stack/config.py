@@ -35,7 +35,9 @@ def load_config(root: Path | None = None) -> QualityConfig:
     project_root = (root or Path.cwd()).resolve()
     raw = _tool_config(project_root)
     paths = _paths(raw.get("paths"), default=("src", "tests", "scripts"))
+
     vertical_raw = _table(raw, "vertical-spacing")
+
     dead_code_raw = _table(raw, "dead-code")
 
     return QualityConfig(
@@ -81,6 +83,7 @@ def _static_guard_config(raw: dict[str, Any], paths: tuple[Path, ...]) -> Static
 def _enum_reachability_config(raw: dict[str, Any]) -> EnumReachabilityConfig:
     table = _table(raw, "enum-reachability")
     models_path = _path(table.get("models-path"), default="")
+
     model_module = _string(table.get("model-module"), default="")
     enabled = bool(table) and bool(models_path.as_posix()) and bool(model_module)
 

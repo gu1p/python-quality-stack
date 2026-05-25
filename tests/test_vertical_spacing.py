@@ -65,6 +65,7 @@ def test_vertical_spacing_separates_setup_blocks_and_final_return() -> None:
         """
         def _build_openrouter_http_client():
             _load_dotenv()
+
             api_key = os.environ.get("OPENROUTER_API_KEY")
 
             if not api_key:
@@ -76,6 +77,7 @@ def test_vertical_spacing_separates_setup_blocks_and_final_return() -> None:
             }
 
             referer = os.environ.get("OPENROUTER_HTTP_REFERER")
+
             title = os.environ.get("OPENROUTER_APP_TITLE")
 
             if referer:
@@ -191,8 +193,121 @@ def test_vertical_spacing_preserves_comment_boundaries() -> None:
     )
 
 
+def test_vertical_spacing_separates_low_cohesion_statement_runs() -> None:
+    assert _format(
+        """
+        def process(self, session, job, answer, record):
+            question = _question_by_id(session, str(job.payload.get("question_id") or answer.question_id))
+            processor = OntologyProcessor(model=self._ontology_model(record), llm=self._llm)
+            processor.process_answer(session, answer, question)
+            latest = self._repository.get(record.id)
+            merge_processed_session(latest.session, session, [answer.id])
+            self._repository.save_session(record.id, latest.session)
+            self._repository.enqueue_job(record.id, "question_replenish", dedupe=True)
+        """
+    ) == _source(
+        """
+        def process(self, session, job, answer, record):
+            question = _question_by_id(session, str(job.payload.get("question_id") or answer.question_id))
+
+            processor = OntologyProcessor(model=self._ontology_model(record), llm=self._llm)
+            processor.process_answer(session, answer, question)
+
+            latest = self._repository.get(record.id)
+            merge_processed_session(latest.session, session, [answer.id])
+
+            self._repository.save_session(record.id, latest.session)
+            self._repository.enqueue_job(record.id, "question_replenish", dedupe=True)
+        """
+    )
+
+
+def test_vertical_spacing_keeps_assignment_with_immediate_use() -> None:
+    assert _format(
+        """
+        def process(record):
+            latest = repository.get(record.id)
+            merge_processed_session(latest.session, record.session, ["answer"])
+            title = metadata.title
+            save_title(title)
+        """
+    ) == _source(
+        """
+        def process(record):
+            latest = repository.get(record.id)
+            merge_processed_session(latest.session, record.session, ["answer"])
+
+            title = metadata.title
+            save_title(title)
+        """
+    )
+
+
+def test_vertical_spacing_keeps_same_receiver_calls_together() -> None:
+    assert _format(
+        """
+        def persist(repository, record, session):
+            repository.save_session(record.id, session)
+            repository.enqueue_job(record.id, "question_replenish", dedupe=True)
+            notify(record.id)
+        """
+    ) == _source(
+        """
+        def persist(repository, record, session):
+            repository.save_session(record.id, session)
+            repository.enqueue_job(record.id, "question_replenish", dedupe=True)
+
+            notify(record.id)
+        """
+    )
+
+
+def test_vertical_spacing_limits_small_unrelated_setup_clusters() -> None:
+    assert _format(
+        """
+        def configure():
+            alpha = 1
+            beta = 2
+            gamma = 3
+            delta = 4
+            epsilon = 5
+        """
+    ) == _source(
+        """
+        def configure():
+            alpha = 1
+            beta = 2
+            gamma = 3
+
+            delta = 4
+            epsilon = 5
+        """
+    )
+
+
+def test_vertical_spacing_separates_independent_long_assignments() -> None:
+    assert _format(
+        """
+        def configure():
+            first_value = load_configuration_value("first")
+            second_value = load_configuration_value("second")
+            return first_value, second_value
+        """
+    ) == _source(
+        """
+        def configure():
+            first_value = load_configuration_value("first")
+
+            second_value = load_configuration_value("second")
+
+            return first_value, second_value
+        """
+    )
+
+
 def test_vertical_spacing_check_mode_does_not_rewrite(tmp_path: Path) -> None:
     path = tmp_path / "sample.py"
+
     original = _source(
         """
         def calculate():

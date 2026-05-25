@@ -76,6 +76,7 @@ def _dynamic_typing_failures(root: Path, config: StaticGuardConfig) -> list[str]
 def _dynamic_typing_file_failures(root: Path, path: Path, config: StaticGuardConfig) -> list[str]:
     relative = _relative(root, path)
     allowed_dynamic = relative in config.dynamic_typing_allowlist or relative.startswith("tests/")
+
     strict_no_get = relative in config.strict_no_get_files
 
     return [
@@ -114,7 +115,9 @@ def _enum_member_reachability_failures(root: Path, config: EnumReachabilityConfi
 def _enum_members(path: Path, allow_marker: str) -> list[EnumMember]:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
+
     tree: ast.Module = ast.parse(text, filename=str(path))
+
     members: list[EnumMember] = []
 
     for node in tree.body:
@@ -179,6 +182,7 @@ def _referenced_enum_members(
 ) -> set[tuple[str, str]]:
     member_names_by_enum = _member_names_by_enum(members)
     enum_names = set(member_names_by_enum)
+
     references: set[tuple[str, str]] = set()
 
     for path in reference_paths:
@@ -333,6 +337,7 @@ def _unused_enum_member_failure(
     allow_marker: str,
 ) -> list[str]:
     key = (member.enum_name, member.member_name)
+
     prefix = f"{relative}:{member.line_number}: {member.enum_name}.{member.member_name}"
     message = _unused_enum_member_message(member, key in references, prefix, allow_marker)
 

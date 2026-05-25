@@ -131,6 +131,7 @@ def test_enum_reachability_accepts_unused_member_with_reason(tmp_path: Path) -> 
 
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
     path.write_text(_dedent(content), encoding="utf-8")
 
 
