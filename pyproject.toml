@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vertical-spacing"
+version = "0.1.0"
+description = "Dependency-free Python formatter for readable vertical spacing inside functions."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    { name = "gu1p" },
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "ruff>=0.13.0",
+]
+
+[project.scripts]
+vertical-spacing = "vertical_spacing.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vertical_spacing"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
