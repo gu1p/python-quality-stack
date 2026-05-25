@@ -12,6 +12,7 @@ python-quality typecheck
 python-quality dead-code
 python-quality complexity
 python-quality quality-guards
+python-quality version-check
 ```
 
 It delegates to:
@@ -56,3 +57,8 @@ allow-marker = "allow-unused-enum:"
 
 `python-quality format` runs Ruff, then the built-in vertical-spacing fixer, then Ruff again.
 `python-quality check` runs the full configured Python quality stack.
+
+`python-quality check` starts with a soft freshness check. If the installed Git commit is behind `main`,
+the check fails and prints the `uv lock --upgrade-package python-quality-stack` command. If GitHub is
+unavailable or the installed commit cannot be determined, it prints a warning and continues. Set
+`PYTHON_QUALITY_SKIP_VERSION_CHECK=1` to skip it explicitly.

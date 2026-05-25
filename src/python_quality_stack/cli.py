@@ -7,6 +7,7 @@ from pathlib import Path
 from python_quality_stack.config import QualityConfig, load_config
 from python_quality_stack.guards import guard_failures, print_guard_failures
 from python_quality_stack.runner import run, run_all
+from python_quality_stack.version_check import check_latest
 from python_quality_stack.vertical_spacing import run_vertical_spacing
 
 Command = Callable[[QualityConfig], int]
@@ -36,6 +37,7 @@ def _commands() -> dict[str, Command]:
         "lint": _lint,
         "quality-guards": _quality_guards,
         "vertical-spacing": _vertical_spacing_check,
+        "version-check": _version_check,
         "typecheck": _typecheck,
         "complexity": _complexity,
         "cognitive-complexity": _complexity,
@@ -87,6 +89,10 @@ def _vertical_spacing_check(config: QualityConfig) -> int:
     return run_vertical_spacing(config.vertical_spacing_paths, fix=False)
 
 
+def _version_check(config: QualityConfig) -> int:
+    return check_latest()
+
+
 def _typecheck(config: QualityConfig) -> int:
     return run_all([["ty", "check"], ["pyright"], ["mypy"]])
 
@@ -113,6 +119,7 @@ def _test(config: QualityConfig) -> int:
 def _check(config: QualityConfig) -> int:
     return run_all(
         [
+            ["python-quality", "version-check"],
             ["python-quality", "format-check"],
             ["python-quality", "lint"],
             ["python-quality", "typecheck"],
