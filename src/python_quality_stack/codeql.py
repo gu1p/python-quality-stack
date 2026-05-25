@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import platform
 import shutil
@@ -8,6 +9,8 @@ import shlex
 import stat
 import subprocess
 import sys
+import tarfile
+import urllib.request
 from collections.abc import Iterable, Mapping, Sequence
 from importlib import resources
 from pathlib import Path
@@ -16,7 +19,15 @@ from typing import NamedTuple
 from urllib.parse import unquote, urlparse
 
 CODEQL_QUERY_SUITE = "codeql/python-queries:codeql-suites/python-security-and-quality.qls"
+CODEQL_VERSION = "2.25.5"
+CODEQL_BUNDLE_DIGESTS = {
+    "linux64": "24717f939f1bef659f893ff4a9c99ba8c056fbaca9640f877c4dc74cf96486d7",
+    "osx64": "c365f6c41145b97150c32026f72df1d02060b15c560588785e764eec10be945e",
+    "win64": "6bef9bd2e61a7b3bca91c19637e5607a5fc887b2cf8b73e7c202516f4df773e1",
+}
+RELEASE_BASE_URL = "https://github.com/github/codeql-action/releases/download"
 SKIP_ENV = "PYTHON_QUALITY_SKIP_CODEQL"
+HOME_ENV = "PYTHON_QUALITY_CODEQL_HOME"
 SUPPORTED_PLATFORMS = {
     "linux64": "Linux x86_64",
     "osx64": "macOS x86_64",
@@ -29,6 +40,7 @@ IGNORED_SOURCE_NAMES = frozenset(
         ".pytest_cache",
         ".ruff_cache",
         ".venv",
+        "_vendor",
         "__pycache__",
         "dist",
         "node_modules",
@@ -78,19 +90,35 @@ def _skip_without_paths() -> int:
 
 
 def _checked_binary() -> Path | None:
-    binary = _bundled_binary()
+    platform_id = _platform_id()
 
-    if binary is None:
-        print(_missing_binary_message())
+    if platform_id is None:
+        print(_unsupported_platform_message())
 
         return None
 
+    binary = _available_binary(platform_id)
+
+    if binary is None:
+        return None
+
     if not _ensure_executable(binary):
-        print(f"error: bundled CodeQL binary is not executable: {binary}")
+        print(f"error: CodeQL binary is not executable: {binary}")
 
         return None
 
     return binary
+
+
+def _available_binary(platform_id: str) -> Path | None:
+    bundled = _bundled_binary(platform_id)
+
+    if bundled is not None:
+        return bundled
+
+    cached = _cached_binary(platform_id)
+
+    return cached if cached is not None else _install_codeql(platform_id)
 
 
 def _analyze_codeql(binary: Path, root: Path, paths: Sequence[Path]) -> tuple[int, list[CodeqlFinding]]:
@@ -217,25 +245,154 @@ def _print_findings(findings: Sequence[CodeqlFinding]) -> int:
     return 1
 
 
-def _bundled_binary() -> Path | None:
-    platform_id = _platform_id()
-
-    if platform_id is None:
-        return None
-
-    executable = "codeql.exe" if platform_id == "win64" else "codeql"
+def _bundled_binary(platform_id: str) -> Path | None:
     resource = resources.files("python_quality_stack").joinpath(
         "_vendor",
         "codeql",
         platform_id,
         "codeql",
-        executable,
+        _executable_name(platform_id),
     )
 
     if not resource.is_file():
         return None
 
     return Path(str(resource))
+
+
+def _cached_binary(platform_id: str) -> Path | None:
+    binary = _bundle_binary_path(_cache_bundle_root(platform_id), platform_id)
+
+    return binary if binary.is_file() else None
+
+
+def _install_codeql(platform_id: str) -> Path | None:
+    destination = _cache_bundle_root(platform_id)
+
+    print(f"Installing CodeQL {CODEQL_VERSION} for {platform_id} into {destination}")
+
+    try:
+        _install_codeql_bundle(platform_id, destination)
+    except (OSError, RuntimeError) as error:
+        print(f"error: failed to install CodeQL: {error}")
+
+        return None
+
+    binary = _bundle_binary_path(destination, platform_id)
+
+    if not binary.is_file():
+        print(f"error: installed CodeQL binary was not found: {binary}")
+
+        return None
+
+    return binary
+
+
+def _install_codeql_bundle(platform_id: str, destination: Path) -> None:
+    with TemporaryDirectory(prefix="python-quality-codeql-install-") as temp:
+        temp_path = Path(temp)
+        archive_path = temp_path / _archive_name(platform_id)
+
+        _download_file(_archive_url(platform_id), archive_path)
+
+        _verify_digest(archive_path, CODEQL_BUNDLE_DIGESTS[platform_id])
+
+        extracted = temp_path / "bundle"
+        extracted.mkdir()
+
+        _extract_archive(archive_path, extracted)
+
+        _replace_cache_bundle(extracted, destination)
+
+
+def _replace_cache_bundle(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    if destination.exists():
+        shutil.rmtree(destination)
+
+    shutil.move(source.as_posix(), destination.as_posix())
+
+
+def _download_file(url: str, destination: Path) -> None:
+    print(f"Downloading {url}")
+
+    with urllib.request.urlopen(url, timeout=120) as response:
+        with destination.open("wb") as output:
+            shutil.copyfileobj(response, output)
+
+
+def _verify_digest(path: Path, expected: str) -> None:
+    actual = _sha256(path)
+
+    if actual != expected:
+        raise RuntimeError(f"checksum mismatch for {path.name}: expected {expected}, got {actual}")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+
+    with path.open("rb") as archive:
+        for chunk in iter(lambda: archive.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+def _extract_archive(archive_path: Path, destination: Path) -> None:
+    with tarfile.open(archive_path, "r:gz") as archive:
+        _safe_extract(archive, destination)
+
+
+def _safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
+    destination_root = destination.resolve()
+
+    for member in archive.getmembers():
+        member_path = (destination / member.name).resolve()
+
+        if not _is_relative_to(member_path, destination_root):
+            raise RuntimeError(f"archive member escapes destination: {member.name}")
+
+    archive.extractall(destination, filter="data")
+
+
+def _archive_url(platform_id: str) -> str:
+    return f"{RELEASE_BASE_URL}/codeql-bundle-v{CODEQL_VERSION}/{_archive_name(platform_id)}"
+
+
+def _archive_name(platform_id: str) -> str:
+    return f"codeql-bundle-{platform_id}.tar.gz"
+
+
+def _cache_bundle_root(platform_id: str) -> Path:
+    return _cache_root() / f"v{CODEQL_VERSION}" / platform_id
+
+
+def _cache_root() -> Path:
+    explicit = os.environ.get(HOME_ENV)
+
+    if explicit:
+        return Path(explicit).expanduser()
+
+    return _platform_cache_root() / "python-quality-stack" / "codeql"
+
+
+def _platform_cache_root() -> Path:
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches"
+
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+
+
+def _bundle_binary_path(bundle_root: Path, platform_id: str) -> Path:
+    return bundle_root / "codeql" / _executable_name(platform_id)
+
+
+def _executable_name(platform_id: str) -> str:
+    return "codeql.exe" if platform_id == "win64" else "codeql"
 
 
 def _platform_id() -> str | None:
@@ -256,15 +413,15 @@ def _platform_id() -> str | None:
     return None
 
 
-def _missing_binary_message() -> str:
+def _unsupported_platform_message() -> str:
     detected = f"{sys.platform}/{platform.machine() or 'unknown'}"
 
     supported = ", ".join(SUPPORTED_PLATFORMS.values())
 
     return (
-        "error: bundled CodeQL is unavailable for this installation. "
+        "error: CodeQL is unavailable for this platform. "
         f"Detected {detected}; supported bundled wheels are {supported}. "
-        "Install a python-quality-stack wheel built with the CodeQL bundle."
+        "Use a supported platform or set PYTHON_QUALITY_SKIP_CODEQL=1 temporarily."
     )
 
 

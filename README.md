@@ -64,9 +64,11 @@ the check fails and prints the `uv lock --upgrade-package python-quality-stack` 
 unavailable or the installed commit cannot be determined, it prints a warning and continues. Set
 `PYTHON_QUALITY_SKIP_VERSION_CHECK=1` to skip it explicitly.
 
-`python-quality dead-code` runs Vulture first, then the bundled CodeQL Python `security-and-quality`
-suite. The CodeQL pass is bundled into platform-specific wheels and does not download anything at
-runtime. Set `PYTHON_QUALITY_SKIP_CODEQL=1` only as a temporary local escape hatch.
+`python-quality dead-code` runs Vulture first, then the CodeQL Python `security-and-quality` suite.
+If CodeQL is not bundled in the wheel, the first run downloads the pinned CodeQL bundle, verifies its
+SHA-256 checksum, extracts it to a versioned local cache, and reuses it on later runs. Set
+`PYTHON_QUALITY_CODEQL_HOME=/path/to/cache` to control the cache location. Set
+`PYTHON_QUALITY_SKIP_CODEQL=1` only as a temporary local escape hatch.
 
 ## Bundled CodeQL wheels
 
@@ -85,4 +87,5 @@ PYTHON_QUALITY_CODEQL_PLATFORM=linux64 python -m build --wheel
 ```
 
 The custom Hatch build hook marks the wheel as platform-specific and includes the vendored CodeQL
-bundle. Source installs or unbundled wheels fail the CodeQL phase with an actionable install message.
+bundle. Source installs or unbundled wheels use the same pinned release and checksum table to install
+CodeQL into the local cache on first run.

@@ -12,6 +12,7 @@ from python_quality_stack.version_check import check_latest
 from python_quality_stack.vertical_spacing import run_vertical_spacing
 
 Command = Callable[[QualityConfig], int]
+DEAD_CODE_EXCLUDES = ("*/_vendor/*",)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -109,6 +110,8 @@ def _dead_code(config: QualityConfig) -> int:
             *_path_args(config.dead_code_paths),
             "--min-confidence",
             str(config.dead_code_min_confidence),
+            "--exclude",
+            ",".join(DEAD_CODE_EXCLUDES),
         ]
     )
 

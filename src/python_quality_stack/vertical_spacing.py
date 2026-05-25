@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TypeGuard
 
 DEFAULT_PATHS = (Path("src"), Path("tests"), Path("scripts"))
-EXCLUDED_PARTS = frozenset({"dist", "node_modules", ".git", ".venv"})
+EXCLUDED_PARTS = frozenset({"dist", "node_modules", ".git", ".venv", "_vendor"})
 SMALL_UNRELATED_CLUSTER_LIMIT = 3
 SMALL_UNRELATED_STATEMENT_CHARS = 40
 

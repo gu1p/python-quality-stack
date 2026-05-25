@@ -11,6 +11,7 @@ from python_quality_stack import codeql
 @pytest.fixture(autouse=True)
 def clear_codeql_skip_env(monkeypatch) -> None:
     monkeypatch.delenv(codeql.SKIP_ENV, raising=False)
+    monkeypatch.delenv(codeql.HOME_ENV, raising=False)
 
 
 def test_codeql_check_can_be_skipped(monkeypatch, capsys) -> None:
@@ -20,20 +21,57 @@ def test_codeql_check_can_be_skipped(monkeypatch, capsys) -> None:
     assert "skipped" in capsys.readouterr().out
 
 
-def test_codeql_check_fails_when_bundle_is_missing(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_codeql_check_fails_when_install_fails(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(codeql, "_bundled_binary", lambda: None)
+    monkeypatch.setattr(codeql, "_platform_id", lambda: "linux64")
+    monkeypatch.setattr(codeql, "_bundled_binary", lambda platform_id: None)
+    monkeypatch.setattr(codeql, "_cached_binary", lambda platform_id: None)
+
+    def fail_install(platform_id: str) -> None:
+        print("error: failed to install CodeQL: download failed")
+
+    monkeypatch.setattr(codeql, "_install_codeql", fail_install)
 
     (tmp_path / "src").mkdir()
 
     assert codeql.run_codeql_check((Path("src"),)) == 1
-    assert "bundled CodeQL is unavailable" in capsys.readouterr().out
+    assert "failed to install CodeQL" in capsys.readouterr().out
+
+
+def test_codeql_check_uses_cached_binary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(codeql.HOME_ENV, (tmp_path / "cache").as_posix())
+    monkeypatch.setattr(codeql, "_platform_id", lambda: "linux64")
+    monkeypatch.setattr(codeql, "_bundled_binary", lambda platform_id: None)
+    monkeypatch.setattr(codeql, "_ensure_executable", lambda binary: True)
+
+    cached_binary = tmp_path / "cache" / f"v{codeql.CODEQL_VERSION}" / "linux64" / "codeql" / "codeql"
+    cached_binary.parent.mkdir(parents=True)
+
+    cached_binary.write_text("", encoding="utf-8")
+
+    _write(tmp_path / "src" / "pkg" / "models.py", "CORE_EVENT_SLOTS = frozenset()\n")
+
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str]) -> int:
+        commands.append(command)
+
+        if "analyze" in command:
+            output_path = Path(command[command.index("--output") + 1])
+            _write_sarif(output_path, "src/pkg/models.py", 1, "Unused global variable 'CORE_EVENT_SLOTS'")
+
+        return 0
+
+    monkeypatch.setattr(codeql, "_run_command", fake_run)
+
+    assert codeql.run_codeql_check((Path("src"),)) == 1
+    assert commands[0][0] == cached_binary.as_posix()
 
 
 def test_codeql_check_reports_sarif_findings(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(codeql, "_bundled_binary", lambda: tmp_path / "codeql")
-    monkeypatch.setattr(codeql, "_ensure_executable", lambda binary: True)
+    monkeypatch.setattr(codeql, "_checked_binary", lambda: tmp_path / "codeql")
 
     (tmp_path / "codeql").write_text("", encoding="utf-8")
 
@@ -55,8 +93,7 @@ def test_codeql_check_reports_sarif_findings(monkeypatch, tmp_path: Path, capsys
 
 def test_codeql_check_ignores_findings_outside_configured_paths(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(codeql, "_bundled_binary", lambda: tmp_path / "codeql")
-    monkeypatch.setattr(codeql, "_ensure_executable", lambda binary: True)
+    monkeypatch.setattr(codeql, "_checked_binary", lambda: tmp_path / "codeql")
 
     (tmp_path / "codeql").write_text("", encoding="utf-8")
 
@@ -79,8 +116,7 @@ def test_codeql_check_ignores_findings_outside_configured_paths(monkeypatch, tmp
 
 def test_codeql_command_uses_database_create_and_analyze(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(codeql, "_bundled_binary", lambda: tmp_path / "codeql")
-    monkeypatch.setattr(codeql, "_ensure_executable", lambda binary: True)
+    monkeypatch.setattr(codeql, "_checked_binary", lambda: tmp_path / "codeql")
 
     (tmp_path / "codeql").write_text("", encoding="utf-8")
 
